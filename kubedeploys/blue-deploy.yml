@@ -29,7 +29,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: '${parameters.service_name}'
-  namespace: default
+  namespace: demo
 spec:
   ports:
     - port: 80
