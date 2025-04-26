@@ -1,0 +1,101 @@
+name: Deploy ElasticGPT Services
+
+
+on:
+  push:
+    branches:
+      - main
+      - runners
+    paths:
+      - 'sample-pipeline-manifest/**'
+jobs:
+ deploy:
+  name: Deploy to GKE
+  runs-on: ubuntu-latest
+  permissions:
+    id-token: write
+    contents: read
+
+
+  steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+
+   # - name: Authenticate with Google Cloud
+   #   id: auth
+   #   uses: google-github-actions/auth@v2
+   #   with:
+   #     project_id: pro-micron-457614-s7
+   #     workload_identity_provider: "projects/117436331624/locations/global/workloadIdentityPools/elasticgpt-ci-oidc/providers/elasticgpt-ci-oidc"
+   #     service_account: "gke-sa@pro-micron-457614-s7.iam.gserviceaccount.com"
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v1
+      with:
+        credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
+
+
+    - name: Set up gcloud CLI
+      uses: google-github-actions/setup-gcloud@v2
+
+
+    - name: Get GitHub Runner Public IP
+      id: get-ip
+      run: |
+        gcloud container clusters describe test-demo --project pro-micron-457614-s7 --region us-west1 --format="value(masterAuthorizedNetworksConfig.cidrBlocks[].cidrBlock)" > current_ips.txt
+        sed -i 's/;/,/g' current_ips.txt
+        cp current_ips.txt current_ips_bkp.txt
+        echo `curl -s https://api.ipify.org`\/32 >> current_ips.txt
+        ip_list=$(paste -sd, current_ips.txt)
+   
+    - name: Add Runner IP to GKE Control Plane
+      run: |
+        gcloud container clusters update test-demo \
+          --project pro-micron-457614-s7 \
+          --region us-west1 \
+          --enable-master-authorized-networks --master-authorized-networks $ip_list
+        #gcloud container clusters update elastic-idea-apps-platform-dev-primary \
+        #  --project elastic-edm-dev \
+        #  --region us-west1 \
+        #  --enable-master-authorized-networks \
+        #  --master-authorized-networks "${RUNNER_IP}/32"
+
+
+    - name: Install GKE Auth Plugin
+      run: |
+        gcloud components install gke-gcloud-auth-plugin
+
+
+    - name: Get GKE Credentials
+      run: |
+        gcloud container clusters get-credentials test-demo \
+          --project pro-micron-457614-s7 \
+          --region us-west1
+
+
+    - name: Deploy All Services via Kustomize
+      run: |
+        kubectl apply -f kubedeploys/simple-deploy.yml
+
+
+    - name: Verify All Rollouts
+      run: |
+        kubectl rollout status deployment/simple-deploy
+        # kubectl rollout status deployment/api
+        # kubectl rollout status deployment/backend
+
+
+
+
+    - name: Remove Runner IP from GKE Control Plane
+      if: always()
+      run: |
+        ip_list=$(paste -sd, current_ips_bkp.txt)
+        gcloud container clusters update test-demo \
+          --project pro-micron-457614-s7 \
+          --region us-west1 \
+          --enable-master-authorized-networks --master-authorized-networks $ip_list
+        #gcloud container clusters update elastic-idea-apps-platform-dev-primary \
+        #  --project elastic-edm-dev \
+        #  --region us-west1 \
+        #  --master-authorized-networks "0.0.0.0/32"
